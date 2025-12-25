@@ -23,10 +23,13 @@ from headless_kivy.constants import (
     REGION_SIZE,
     ROTATION,
     WIDTH,
+    WINDOW_MODE,
 )
 from headless_kivy.logger import add_file_handler, add_stdout_handler
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy._typing import NDArray  # pyright: ignore[reportPrivateImportUsage]
 
 kivy.require('2.1.0')  # pyright: ignore[reportAttributeAccessIssue]
@@ -64,6 +67,20 @@ class SetupHeadlessConfig(TypedDict):
     region_size: `int`, optional
         Approximate size of rectangles to divide the screen into and see if they need to
         be updated.
+    window_mode: `str`, optional
+        Control window creation behavior. Options:
+        - 'auto': Default behavior, create window on available display
+        - 'hidden': Create window but keep it hidden
+        - 'dummy': Use dummy SDL video driver (no physical display)
+        - 'offscreen': Use offscreen rendering (no window)
+        - 'none': Disable window creation entirely
+    display_selector: `Callable[[list[dict]], int]`, optional
+        Function to select which display to use when multiple are available.
+        Receives list of display info dicts with 'index', 'width', 'height', 'name'.
+        Should return the index of the display to use.
+        Example: lambda displays: min(
+            displays, key=lambda d: d['width'] * d['height']
+        )['index']
 
     """
 
@@ -79,6 +96,8 @@ class SetupHeadlessConfig(TypedDict):
     flip_horizontal: NotRequired[bool]
     flip_vertical: NotRequired[bool]
     region_size: NotRequired[int]
+    window_mode: NotRequired[str]
+    display_selector: NotRequired[Callable[[list[dict]], int]]
 
 
 _config: SetupHeadlessConfig | None = None
@@ -100,12 +119,68 @@ def setup_headless_kivy(config: SetupHeadlessConfig) -> None:
     config: `SetupHeadlessConfig`
 
     """
+    import os
+
     global _config  # noqa: PLW0603
     _config = config
 
     if is_debug_mode():
         add_stdout_handler()
         add_file_handler()
+
+    # Configure window mode before Kivy initialization
+    window_mode = config.get('window_mode', WINDOW_MODE)
+    if window_mode == 'dummy':
+        os.environ['SDL_VIDEODRIVER'] = 'dummy'
+        os.environ['SDL_AUDIODRIVER'] = 'dummy'
+    elif window_mode == 'offscreen':
+        os.environ['SDL_VIDEODRIVER'] = 'offscreen'
+    elif window_mode == 'hidden':
+        Config.set('graphics', 'window_state', 'hidden')
+    elif window_mode == 'none':
+        os.environ['KIVY_WINDOW'] = ''
+
+    # Configure display selection if selector is provided
+    display_selector = config.get('display_selector')
+    if display_selector and window_mode == 'auto':
+        try:
+            import sdl2
+            import sdl2.ext
+
+            # Initialize SDL video subsystem
+            sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO)
+
+            # Query available displays
+            num_displays = sdl2.SDL_GetNumVideoDisplays()
+            displays = []
+
+            for i in range(num_displays):
+                mode = sdl2.SDL_DisplayMode()
+                sdl2.SDL_GetCurrentDisplayMode(i, mode)
+                name = sdl2.SDL_GetDisplayName(i)
+                displays.append({
+                    'index': i,
+                    'width': mode.w,
+                    'height': mode.h,
+                    'refresh_rate': mode.refresh_rate,
+                    'name': name.decode('utf-8') if name else f'Display {i}',
+                })
+
+            # Let user select display
+            selected_index = display_selector(displays)
+
+            # Configure SDL to use selected display
+            os.environ['SDL_VIDEO_FULLSCREEN_DISPLAY'] = str(selected_index)
+
+            # Clean up SDL
+            sdl2.SDL_Quit()
+        except (ImportError, Exception) as e:
+            # If SDL2 not available or error occurs, fall back to default behavior
+            if is_debug_mode():
+                from headless_kivy import logger
+                logger.logger.warning(
+                    f'Display selection failed: {e}, using default display',
+                )
 
     Config.set('kivy', 'kivy_clock', 'default')
     Config.set('graphics', 'fbo', 'force-hardware')
@@ -235,4 +310,12 @@ def region_size() -> int:
     """Return the approximate size of rectangles to divide the screen into."""
     if _config:
         return _config.get('region_size', REGION_SIZE)
+    report_uninitialized()
+
+
+@cache
+def window_mode() -> str:
+    """Return the window mode configuration."""
+    if _config:
+        return _config.get('window_mode', WINDOW_MODE)
     report_uninitialized()

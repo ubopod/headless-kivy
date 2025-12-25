@@ -26,6 +26,12 @@ To use its test tools, you can install it with the following command:
 pip install headless-kivy[test]
 ```
 
+To use the display selection feature (for selecting between multiple physical displays like HDMI + DSI):
+
+```sh
+pip install headless-kivy[display-select]
+```
+
 ## 🛠 Usage
 
 1. Call setup_headless() before inheriting the `HeadlessWidget` class for the root
@@ -44,6 +50,7 @@ pip install headless-kivy[test]
        rotation=1, # gets multiplied by 90 degrees
        flip_horizontal=True,
        double_buffering=True, # let headless kivy generate the next frame while the previous callback is still running
+       window_mode='none', # control window creation: 'auto', 'hidden', 'dummy', 'offscreen', or 'none'
    )
    ```
 
@@ -130,6 +137,75 @@ If set to `True`, it will flip the display horizontally.
 #### `flip_vertical`
 
 If set to `True`, it will flip the display vertically.
+
+#### `window_mode`
+
+Controls how Kivy creates and manages display windows. This is crucial for embedded systems where you want deterministic display selection (e.g., SPI display instead of HDMI). Options:
+
+- `'auto'` (default): Standard Kivy behavior, creates a window on the first available display (usually HDMI if connected)
+- `'hidden'`: Creates a window but keeps it hidden (useful for testing or when you need GL context)
+- `'dummy'`: Uses dummy SDL video driver, no physical display output (fully headless)
+- `'offscreen'`: Uses offscreen rendering, no window created
+- `'none'`: Disables Kivy window creation entirely
+
+**For Raspberry Pi with both HDMI and SPI displays:** Use `window_mode='none'` or `window_mode='dummy'` to prevent Kivy from creating a window on HDMI and only render to your custom display via the callback.
+
+You can also set this via environment variable:
+```bash
+export HEADLESS_KIVY_WINDOW_MODE=none
+```
+
+#### `display_selector`
+
+A function to select which physical display to use when multiple displays are available (e.g., HDMI + DSI). Only works when `window_mode='auto'`.
+
+**Requires:** `pip install headless-kivy[display-select]` (installs PySDL2)
+
+The function receives a list of display info dictionaries and should return the index of the display to use. Each display dict contains:
+- `'index'`: Display index
+- `'width'`: Display width in pixels
+- `'height'`: Display height in pixels
+- `'refresh_rate'`: Refresh rate in Hz
+- `'name'`: Display name
+
+**Example 1: Always select the display with smallest resolution (prioritize small embedded displays)**
+```python
+def select_smallest_display(displays):
+    return min(displays, key=lambda d: d['width'] * d['height'])['index']
+
+config.setup_headless_kivy({
+    'callback': render_callback,
+    'display_selector': select_smallest_display,
+})
+```
+
+**Example 2: Select display with specific resolution (e.g., 240x240 SPI display)**
+```python
+def select_240x240_display(displays):
+    # Try to find 240x240 display first
+    for display in displays:
+        if display['width'] == 240 and display['height'] == 240:
+            return display['index']
+    # Fallback to smallest display
+    return min(displays, key=lambda d: d['width'] * d['height'])['index']
+
+config.setup_headless_kivy({
+    'callback': render_callback,
+    'display_selector': select_240x240_display,
+})
+```
+
+**Example 3: Lambda for selecting smallest display**
+```python
+config.setup_headless_kivy({
+    'callback': render_callback,
+    'display_selector': lambda displays: min(
+        displays, key=lambda d: d['width'] * d['height']
+    )['index'],
+})
+```
+
+**Note:** This only affects window-system-managed displays (HDMI, DSI with proper drivers). SPI displays are not part of the window system and should be controlled via the `callback` function.
 
 ## 🤝 Contributing
 

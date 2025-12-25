@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pypng >= 0.20220715.0"]
+display-select = ["pysdl2 >= 0.9.16"]
 
 [tool.uv]
 dev-dependencies = [
